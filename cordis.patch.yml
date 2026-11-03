@@ -1,0 +1,3 @@
+- insert:
+    - id: exit-code-lens
+      name: dsh-exit-code-lens

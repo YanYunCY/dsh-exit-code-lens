@@ -1,0 +1,18 @@
+{
+  "name": "dsh-exit-code-lens",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: tells the agent when a non-zero exit code is an answer (grep found nothing, diff found differences, test was false) rather than a failure, so it stops re-verifying commands that worked.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "files": ["src", "cordis.patch.yml", "README.md", "LICENSE"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "bash", "exit-code", "agent"],
+  "license": "MIT",
+  "author": "YanYunCY",
+  "repository": { "type": "git", "url": "git+https://github.com/YanYunCY/dsh-exit-code-lens.git" },
+  "engines": { "node": ">=24.9.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": { "test": "node --test test/*.test.js" },
+  "peerDependencies": { "@deepseek-ai/schemastery": "^3.18.5" },
+  "devDependencies": { "@deepseek-ai/schemastery": "^3.18.5" }
+}
