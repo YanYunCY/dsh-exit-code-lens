@@ -74,6 +74,19 @@ Requires Node ≥ 24.9. Tested with dsh 0.2.1-rc.5. No build step, no runtime de
 
 One extra line per matching result, and one sentence (~70 tokens) in the system prompt. The prompt sentence is static, so it does not break the KV cache between requests. Set `prompt: false` to drop it.
 
+## Does it help? (measured)
+
+We ran 4 tasks that lead the model into `grep`, `diff`, `git diff --exit-code` and `test -f` returning 1, 3 times each, with and without the plugin, on DeepSeek's official API (2026-11-05):
+
+| Model | Steps (off / on) | Tool calls (off / on) |
+|---|---|---|
+| `deepseek-flash` | 30 / 30 | 18 / 19 |
+| `deepseek-v4-pro` | 24 / 24 | 12 / 12 |
+
+Today's official models already took exit 1 at face value on these simple tasks, so the plugin made **no measurable difference** there, and the prompt sentence costs a few percent more input tokens. It is aimed at older, smaller or relayed models that do loop on harmless exit codes (as in the reports above). If your model doesn't loop, you don't need it.
+
+中文：在官方 `deepseek-flash` 与 `deepseek-v4-pro` 上实测无差异（模型本身已不会被 exit 1 带偏）。本插件主要面向较旧、较小或经中转的、仍会反复核查的模型。
+
 ## What it does not do
 
 - It does not hide the exit code or turn the card green. The model still sees the real status.
