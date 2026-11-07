@@ -29,23 +29,31 @@ Built-in rules (exit 1 only):
 | Command | Meaning of exit 1 |
 |---|---|
 | `grep` `egrep` `fgrep` `zgrep` `rg` `ag` `ack` `git grep` | no matches |
-| `diff` `cmp` `git diff --exit-code/--quiet` | inputs differ |
+| `diff` `cmp` `colordiff` `git diff --exit-code/--quiet` | inputs differ |
 | `test` `[` `[[` | condition is false |
-| `which` `type` `command -v` `hash` | not installed |
+| `which` `type` `command -v/-V` `hash` | not installed |
 | `pgrep` `pidof` | no such process |
 | `git merge-base --is-ancestor` | not an ancestor |
-| `jq -e` | last output false/null |
+| `jq -e` (also `--exit-status`, combined flags like `-re`) | last output false/null |
+| `false` | always exits 1 |
+
+Commands are matched by name, so full paths (`/usr/bin/grep`, `./node_modules/.bin/rg`) and quoted names (`"grep"`) work. `git` global options before the subcommand (`-C dir`, `-c k=v`, `--no-pager`) are skipped. Plain `git diff` (without `--exit-code`/`--quiet`) never exits 1 for changes, so it gets no note.
 
 ## When it stays quiet
 
 It is deliberately conservative. No note is added when:
-- anything was written to stderr (`grep pattern missing-file` exits 2 and prints an error — that *is* a failure);
-- the exit code is anything other than the rule's code (e.g. `grep` 2, `diff` 2);
-- the deciding command is not the last one: `grep x f | wc -l`, `grep x f || echo none`, `cmd &`;
-- the command uses control flow, subshells or heredocs (`if`, `for`, `( … )`, `<<EOF`);
-- the call was killed, timed out, or failed to run.
+- anything non-blank was written to stderr (`grep pattern missing-file` exits 2 and prints an error — that *is* a failure);
+- the exit code is anything other than the rule's code (e.g. `grep` 2, `diff` 2, 124 from `timeout`, 127 not found);
+- the deciding command is not the last one: `grep x f | wc -l`, `grep x f; npm test`, `grep x f && npm test`, `grep x f |& tee out`;
+- the command contains `||` or a background `&` anywhere (`grep x f || echo none`, `cmd &`, `cmd & wait`);
+- the command uses control flow or negation (`if`, `for`, `while`, `case`, `function`, `!`), subshells, `{ …; }` groups or process substitution (`( … )`, `diff <(sort a) <(sort b)`), heredocs or here-strings (`<<EOF`, `<<<`), or has an unterminated quote;
+- the deciding command runs through `xargs` (it maps child exit codes to 123);
+- the call was killed, timed out, failed to run, or the result has no `[exit code: N]` marker;
+- the result already carries an `[exit-code note: …]` line (it is never added twice).
 
-Leading `VAR=x`, `env`, `sudo`, `timeout N`, `nice -n N` and redirects like `2>/dev/null` are looked through. For pipelines or `cd x && grep …` the note adds "(Assuming the status came from the last command.)"
+Looked through, so the real command decides: leading `VAR=x` assignments, `env [-i] [VAR=x]`, `sudo`/`doas` (flags without values, e.g. `-E`), `timeout [--signal=S | -s S | -k D] N`, `nice [-n N]`, `ionice [-c N]`, `nohup`, `time`, `command`, `exec`, `stdbuf`, redirects anywhere in the command (`2>/dev/null`, `>/dev/null 2>&1`, `&>out`, `< input`), trailing `# comments` and `\`-newline line continuations. `&&` and `||` inside `[[ … ]]` belong to the test, so `[[ -f a && -f b ]]` is treated as one `[[` command.
+
+For a pipeline, or a command with an earlier `&&`/`;`/newline step (`cat log | grep x`, `cd src && grep …`), the note ends with "(Assuming the status came from the last command.)", because with `pipefail` or a failing earlier step the status could come from elsewhere.
 
 ## Install
 
@@ -63,12 +71,14 @@ Requires Node ≥ 24.9. Tested with dsh 0.2.1-rc.5. No build step, no runtime de
   config:
     tools: [bash]          # tool names to annotate
     prompt: true           # add the one-line system-prompt hint
-    rules:                 # your own tools, checked before the built-ins
+    rules:                 # your own tools, checked before the built-ins (a match here wins)
       - command: mytool
         subcommand: check
         codes: [3]
         note: "{cmd} exits {code} when the check is still pending. Nothing failed."
 ```
+
+`command` can be a name or a list of names (matched by basename, after the same look-through as built-ins); `subcommand`, when set, must be the first argument; `{cmd}` and `{code}` in `note` become the command name and the exit code. The stay-quiet rules above apply to custom rules too. `prompt: false` drops only the system-prompt sentence; results are still annotated.
 
 ## Cost
 
