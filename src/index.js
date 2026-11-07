@@ -57,7 +57,8 @@ export function annotate(content, note) {
     const m = EXIT_RE.exec(b.text)
     if (!m) return undefined
     const head = b.text.slice(0, m.index)
-    const text = `${head}\n[exit-code note: ${note}]\n[exit code: ${m[1]}]`
+    if (/(^|\n)\[exit-code note: [^\n]*\]$/.test(head)) return undefined // already annotated
+    const text = `${head}${head ? '\n' : ''}[exit-code note: ${note}]\n[exit code: ${m[1]}]`
     const next = content.slice()
     next[i] = { ...b, text }
     return next

@@ -13,8 +13,8 @@ export const BUILTIN_RULES = [
   { id: 'git-grep', match: a => base(a[0]) === 'git' && gitSub(a) === 'grep', codes: [1], note: 'git grep exits 1 when nothing matched. Nothing failed; the answer is "no matches".' },
   { id: 'diff', match: a => ['diff', 'cmp', 'colordiff'].includes(base(a[0])), codes: [1], note: '{cmd} exits 1 when the inputs differ. Nothing failed; the output is the difference.' },
   { id: 'git-diff', match: a => base(a[0]) === 'git' && gitSub(a) === 'diff' && a.some(w => w === '--exit-code' || w === '--quiet'), codes: [1], note: 'git diff --exit-code/--quiet exits 1 when there are changes. Nothing failed.' },
-  { id: 'test', match: a => ['test', '[', '[['].includes(a[0]), codes: [1], note: '{cmd} exits 1 when the condition is false. Nothing failed; the answer is "false".' },
-  { id: 'which', match: a => ['which', 'type', 'hash'].includes(a[0]) || (a[0] === 'command' && (a[1] === '-v' || a[1] === '-V')), codes: [1], note: '{cmd} exits 1 when the command is not installed. Nothing failed; the answer is "not found".' },
+  { id: 'test', match: a => ['test', '[', '[['].includes(a[0]) || ['test', '['].includes(base(a[0])), codes: [1], note: '{cmd} exits 1 when the condition is false. Nothing failed; the answer is "false".' },
+  { id: 'which', match: a => ['which', 'type', 'hash'].includes(a[0]) || base(a[0]) === 'which' || (a[0] === 'command' && (a[1] === '-v' || a[1] === '-V')), codes: [1], note: '{cmd} exits 1 when the command is not installed. Nothing failed; the answer is "not found".' },
   { id: 'pgrep', match: a => ['pgrep', 'pidof'].includes(base(a[0])), codes: [1], note: '{cmd} exits 1 when no process matched. Nothing failed; the answer is "not running".' },
   { id: 'git-ancestor', match: a => base(a[0]) === 'git' && gitSub(a) === 'merge-base' && a.includes('--is-ancestor'), codes: [1], note: 'git merge-base --is-ancestor exits 1 when it is not an ancestor. Nothing failed; the answer is "no".' },
   { id: 'jq-e', match: a => base(a[0]) === 'jq' && a.some(w => w === '-e' || w === '--exit-status' || /^-[a-zA-Z]*e[a-zA-Z]*$/.test(w)), codes: [1], note: 'jq -e exits 1 when the last output is false or null. Nothing failed.' },
@@ -55,12 +55,19 @@ export function lex(command) {
   let inWord = false
   let complex = false
   let depth = 0
-  const pushWord = () => { if (inWord) { words.push(word); word = ''; inWord = false } }
+  let inDbl = false // inside `[[ … ]]`, where && and || are part of the expression
+  const pushWord = () => {
+    if (!inWord) return
+    if (word === '[[' && words.length === 0) inDbl = true
+    else if (word === ']]') inDbl = false
+    words.push(word); word = ''; inWord = false
+  }
   const pushCmd = () => { pushWord(); pipeline.push(words); words = [] }
   const pushPipe = sep => { pushCmd(); pipelines.push({ cmds: pipeline, sep }); pipeline = [] }
   for (let i = 0; i < command.length; i++) {
     const c = command[i]
     const n = command[i + 1]
+    if (c === '\\' && n === '\n') { i++; continue } // line continuation: not a word
     if (c === '\\') { word += n ?? ''; inWord = true; i++; continue }
     if (c === "'") { const j = command.indexOf("'", i + 1); if (j === -1) { complex = true; break } word += command.slice(i + 1, j); inWord = true; i = j; continue }
     if (c === '"') {
@@ -78,6 +85,7 @@ export function lex(command) {
     if (c === '(' || c === ')' || c === '{' && !inWord && (n === ' ' || n === '\n')) { complex = true; depth += c === '(' ? 1 : 0; pushWord(); continue }
     if (c === '<' && n === '<') { complex = true }
     if (c === '#' && !inWord) { const j = command.indexOf('\n', i); if (j === -1) break; i = j - 1; continue }
+    if (inDbl && (c === '|' && n === '|' || c === '&' && n === '&')) { pushWord(); words.push(c + n); i++; continue }
     if (c === '|' && n === '|') { pushPipe('||'); i++; continue }
     if (c === '&' && n === '&') { pushPipe('&&'); i++; continue }
     if (c === '|' && n === '&') { pushCmd(); i++; continue }
@@ -114,7 +122,12 @@ export function unwrap(argv) {
     while (a.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(a[0])) a.shift()
     const head = base(a[0])
     if (head === 'env') { a.shift(); while (a.length > 0 && (a[0].startsWith('-') || a[0].includes('='))) a.shift(); continue }
-    if (head === 'timeout') { a.shift(); while (a.length > 0 && a[0].startsWith('-')) a.shift(); a.shift(); continue }
+    if (head === 'timeout') {
+      a.shift()
+      while (a.length > 0 && a[0].startsWith('-')) { const opt = a.shift(); if (opt === '-s' || opt === '-k') a.shift() } // -s SIG, -k DUR take a value
+      a.shift() // the duration
+      continue
+    }
     if (head === 'xargs') return a // xargs maps child exit 1-125 to 123; not a plain rule
     if (WRAPPERS.has(head) && !(head === 'command' && (a[1] === '-v' || a[1] === '-V'))) {
       a.shift()
@@ -153,7 +166,7 @@ export function explain(command, exitCode, opts = {}) {
   for (const rule of rules) {
     if (!rule.codes.includes(exitCode)) continue
     if (!rule.match(decider)) continue
-    const cmd = rule.id === 'test' ? (decider[0] === 'test' ? 'test' : decider[0]) : base(decider[0])
+    const cmd = base(decider[0])
     let note = rule.note.replaceAll('{cmd}', cmd).replaceAll('{code}', String(exitCode))
     // With a pipeline or an earlier `&&`/`;` step the status could, rarely, come
     // from somewhere else (pipefail); say so instead of overclaiming.
